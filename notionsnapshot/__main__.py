@@ -260,7 +260,7 @@ class Scraper:
             block_style = toggle_block_button.find_element(By.TAG_NAME, "svg").get_attribute("style")
             assert isinstance(block_style, str), "toggle block style should be string"
             assert block_style is not None
-            is_expanded = "(180deg)" in block_style
+            is_expanded = "(0deg)" in block_style
             if not is_expanded:
                 Scraper.driver.execute_script("arguments[0].click();", toggle_block_button)
                 try:
