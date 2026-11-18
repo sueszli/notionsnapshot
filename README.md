@@ -6,12 +6,6 @@
 /_/ |_/\____/\__/_/\____/_/ /_/   /____/_/ /_/\__,_/ .___/____/_/ /_/\____/\__/
 the ultimate notion scraper                       /_/
 
-
-Warning: This project is no longer maintained.
-
-- Please check out its successor: https://github.com/sueszli/notionbackup
-- Or its predecessor: https://github.com/leoncvlt/loconotion
-
 Usage:
 
 $ python notionsnapshot --help
