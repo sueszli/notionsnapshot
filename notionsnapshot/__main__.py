@@ -132,7 +132,7 @@ class FileManager:
 
         except Exception as error:
             LOG.critical(f"error downloading asset on '{url}' - the online link to it will be used instead \n\t{error}")
-            return str(Path(url)).replace("\\", "/")
+            return url
 
     @staticmethod
     def _generate_filename(url: str) -> str:
@@ -166,12 +166,15 @@ class FileManager:
         LOG.info(f"saved page\n\n\n\n\n\n\n")
 
     @staticmethod
+    def get_page_id(url: str) -> Optional[str]:
+        # titles repeat and notion also links pages as /p/<title>-<id>, so the 32 character id is the only reliable name
+        ids = re.findall(r"[0-9a-f]{32}", urllib.parse.urlparse(url).path)
+        return ids[-1] if ids else None
+
+    @staticmethod
     def get_filename_from_url(url: str) -> str:
-        id = urllib.parse.urlparse(url).path[1:]
-        filename = id[: id.rfind("-")].lower() + ".html"
-        if url == ARGS.url:
-            filename = "index.html"
-        return filename
+        page_id = FileManager.get_page_id(url)
+        return "index.html" if page_id == FileManager.get_page_id(ARGS.url) else f"{page_id}.html"
 
 
 class Scraper:
@@ -239,7 +242,10 @@ class Scraper:
 
     @trace(print_args=False)
     @staticmethod
-    def _expand_toggle_blocks(expanded_toggle_blocks=[]) -> None:
+    def _expand_toggle_blocks(expanded_toggle_blocks: Optional[List[WebElement]] = None) -> None:
+        if expanded_toggle_blocks is None:
+            expanded_toggle_blocks = []
+
         def get_toggle_blocks() -> List[WebElement]:
             toggle_blocks = Scraper.driver.find_elements(By.CLASS_NAME, "notion-toggle-block")
             header_toggle_blocks = []
@@ -408,11 +414,14 @@ class Scraper:
 
                 get_new_files = lambda: set(os.listdir(FileManager.assets_dir)) - assets_before_download
                 is_downloaded = lambda: len(get_new_files()) == 1 and is_in_list(download_name, list(get_new_files()))
-                while not is_downloaded():
+                deadline = time.time() + ARGS.timeout
+                while not is_downloaded() and time.time() < deadline:
                     time.sleep(0.25)
                     LOG.info(f"{get_new_files()} doesn't contain '{download_name}' yet")
+                if not is_downloaded():
+                    LOG.critical(f"timed out downloading '{download_name}', it won't be linked in the snapshot")
+                    continue
                 LOG.info(f"downloaded '{download_name}'")
-                assert not re.compile(rf"{download_name} \(\d+\)\.pdf") in get_new_files(), "downloaded same pdf multiple times"
 
             soup_blocks = soup.findAll("div", {"class": "notion-file-block"})
             soup_names = [[c.text for c in b.find_all("div")][-2] for b in soup_blocks]
@@ -496,7 +505,7 @@ class Scraper:
                 a["href"] = f"#{arr[-1]}"
                 a["class"] = a.get("class", []) + ["notionsnapshot-anchor-link"]
 
-            elif is_scroller or is_topbar:
+            elif (is_scroller or is_topbar) and FileManager.get_page_id(url):
                 filename = FileManager.get_filename_from_url(url)
                 a["href"] = filename
                 subpage_urls.append(url)
