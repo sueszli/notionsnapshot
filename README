@@ -1,0 +1,27 @@
+    _   __      __  _                _____                        __          __
+   / | / /___  / /_(_)___  ____     / ___/____  ____ _____  _____/ /_  ____  / /_
+  /  |/ / __ \/ __/ / __ \/ __ \    \__ \/ __ \/ __ `/ __ \/ ___/ __ \/ __ \/ __/
+ / /|  / /_/ / /_/ / /_/ / / / /   ___/ / / / / /_/ / /_/ (__  ) / / / /_/ / /_
+/_/ |_/\____/\__/_/\____/_/ /_/   /____/_/ /_/\__,_/ .___/____/_/ /_/\____/\__/
+                                                  /_/
+
+Save a public Notion page, and every page it links to,
+as self-contained HTML files that work offline.
+
+
+    $ uv run notionsnapshot.py https://sueszli.notion.site/NotionSnapshot-Test-tiny-page-4dfa05657f774b45993542da4a8530c2
+    $ open snapshot/index.html
+
+
+Each page becomes one file. Stylesheets, fonts, images,
+video and audio are embedded, Notion's JavaScript is removed
+and links between pages point at the other local files.
+Toggles are saved expanded.
+
+The first run downloads a headless Chromium through
+Playwright. The browser cache lives in ~/.cache/notionsnapshot
+because Notion rate limits clients that refetch its assets.
+
+Not supported: file attachments, iframe embeds such as
+YouTube or Google Maps (they need the network) and
+horizontal scrolling in wide database views.
