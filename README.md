@@ -11,7 +11,7 @@ Usage:
 $ uv run notionsnapshot/__main__.py --help
 $ uv run notionsnapshot/__main__.py --dark-mode https://sueszli.notion.site/NotionSnapshot-Test-tiny-page-4dfa05657f774b45993542da4a8530c2
 
-Requires uv and Google Chrome.
+Requires uv. Playwright downloads Chromium on the first run.
 ```
 
 | <img width="685" src="docs/assets/export.jpeg"> | <img width="685" src="docs/assets/snapshot.jpeg"> | <img width="685" src="docs/assets/original.jpeg"> |
