@@ -1,34 +1,24 @@
-import logging
 import os
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service as ChromeService
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.service import Service
+import subprocess
+import sys
+
+from appdirs import user_cache_dir
+from playwright.sync_api import Page, sync_playwright
 
 from argparser import ARGS
 
 
 class DriverInitializer:
     @staticmethod
-    def get_driver() -> webdriver.Chrome:
-        # see: https://github.com/GoogleChrome/chrome-launcher/blob/main/docs/chrome-flags-for-tools.md
-        opts = Options()
-        opts.add_argument("--disable-client-side-phishing-detection")
-        opts.add_argument("--no-first-run")
-        opts.add_argument("--enable-automation")
-        opts.add_argument("--no-sandbox")
-        opts.add_argument("--disable-dev-shm-usage")
-        opts.add_argument("--disable-gpu")
-        opts.add_argument("--silent")
-        opts.add_argument("--disable-logging")
-        opts.add_argument("--headless=new") if not ARGS.show_browser else opts.add_argument("window-size=900,1200")
-        opts.add_experimental_option("excludeSwitches", ["enable-logging"])
+    def get_page() -> Page:
+        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
 
-        os.environ["WDM_PROGRESS_BAR"] = str(0)
-        os.environ["WDM_LOG"] = str(logging.NOTSET)
+        # a persistent profile keeps notion's ~300 scripts in the http cache, without it repeated runs get rate limited
+        profile_dir = os.path.join(user_cache_dir(appname="notion-snapshot", appauthor="sueszli"), "browser")
+        context = sync_playwright().start().chromium.launch_persistent_context(profile_dir, headless=not ARGS.show_browser, viewport={"width": 900, "height": 1200})
+        page = context.pages[0]
 
-        executable_path = ChromeDriverManager().install()
-        chrome_executable: Service = ChromeService(executable_path=executable_path)
-        driver = webdriver.Chrome(service=chrome_executable, options=opts)
-        return driver
+        # notion's bot check rejects the headless user agent
+        user_agent = page.evaluate("navigator.userAgent").replace("Headless", "")
+        context.new_cdp_session(page).send("Network.setUserAgentOverride", {"userAgent": user_agent})
+        return page
