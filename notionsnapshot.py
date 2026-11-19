@@ -14,56 +14,6 @@ from pathlib import Path
 
 from playwright.sync_api import Error, Page, TimeoutError, sync_playwright
 
-# runs inside the loaded page: strips notion's app, inlines every asset, rewrites links to local files
-SNAPSHOT_JS = r"""
-async (rootId) => {
-  const pageId = (s) => s.match(/[0-9a-f]{32}/)?.[0]
-  const loaded = new Set(performance.getEntriesByType('resource').map((e) => e.name))
-  const dataUrl = async (u) => (await window.dataUrl(u)) ?? u
-  // stylesheets reference every font notion has, so only embed what this page actually used
-  const inlineUrls = async (css, base, all) => {
-    let out = '', i = 0
-    for (const m of css.matchAll(/url\(\s*(['"]?)([^'")]+)\1\s*\)/g)) {
-      if (m[2].startsWith('data:')) continue
-      const u = new URL(m[2], base).href
-      out += css.slice(i, m.index) + `url("${all || loaded.has(u) ? await dataUrl(u) : u}")`
-      i = m.index + m[0].length
-    }
-    return out + css.slice(i)
-  }
-
-  // work on a detached copy, notion's app keeps mutating the live page while we await
-  const doc = new DOMParser().parseFromString(document.documentElement.outerHTML, 'text/html')
-  const abs = (e, attr) => new URL(e.getAttribute(attr), location.href)
-  doc.querySelectorAll('script, noscript, base, link:not([rel=stylesheet]), meta:not([charset], [name=viewport]), .notion-overlay-container').forEach((e) => e.remove())
-  doc.querySelectorAll('iframe').forEach((e) => e.closest('.notion-page-content') || e.remove())
-  for (const link of doc.querySelectorAll('link[rel=stylesheet]')) {
-    const href = abs(link, 'href').href, css = await dataUrl(href)
-    if (!css.startsWith('data:')) { link.setAttribute('href', href); continue }
-    const style = doc.createElement('style')
-    style.textContent = await inlineUrls(await (await fetch(css)).text(), href, false)
-    link.replaceWith(style)
-  }
-  for (const e of doc.querySelectorAll('[style*="url("]')) e.setAttribute('style', await inlineUrls(e.getAttribute('style'), location.href, true))
-  for (const e of doc.querySelectorAll('img[src], video[src], audio[src], source[src]')) {
-    e.setAttribute('src', await dataUrl(abs(e, 'src').href))
-    e.removeAttribute('srcset')
-    e.removeAttribute('loading')
-  }
-
-  // table of contents links point at #<block id without dashes>
-  for (const e of doc.querySelectorAll('[data-block-id]')) e.id = e.dataset.blockId.replaceAll('-', '')
-  const links = []
-  for (const a of doc.querySelectorAll('a[href]')) {
-    const u = abs(a, 'href'), id = pageId(u.pathname)
-    if (u.host !== location.host || !id) a.setAttribute('href', u.href)
-    else if (id === pageId(location.pathname) && u.hash) a.setAttribute('href', u.hash)
-    else { a.setAttribute('href', id === rootId ? 'index.html' : `${id}.html`); links.push(u.origin + u.pathname) }
-  }
-  return ['<!doctype html>\n' + doc.documentElement.outerHTML, links]
-}
-"""
-
 
 def page_id(url: str) -> str | None:
     m = re.search(r"[0-9a-f]{32}", url.split("?")[0])
@@ -71,13 +21,12 @@ def page_id(url: str) -> str | None:
 
 
 def settle(page: Page) -> None:
+    page.wait_for_function("notionsnapshot.isLoaded()", timeout=60_000)
     # notion keeps streaming blocks in after the spinners are gone, so also wait until the block count stops changing
-    page.wait_for_function("document.querySelector('.notion-frame') && !document.querySelector('.loading-spinner, .notion-unknown-block')", timeout=60_000)
     count = -1
-    while count != (count := page.locator("[data-block-id]").count()):
+    while count != (count := page.evaluate("notionsnapshot.blockCount()")):
         # notion only renders blocks near the viewport, so grow it until the whole page fits
-        height = page.evaluate("document.querySelector('.notion-frame .notion-scroller')?.scrollHeight ?? 0")
-        page.set_viewport_size({"width": 1280, "height": max(1000, height)})
+        page.set_viewport_size({"width": 1280, "height": max(1000, page.evaluate("notionsnapshot.pageHeight()"))})
         page.wait_for_timeout(1000)
 
 
@@ -101,7 +50,7 @@ def main() -> None:
         # notion's bot check rejects the headless user agent
         user_agent = page.evaluate("navigator.userAgent").replace("Headless", "")
         browser.new_cdp_session(page).send("Network.setUserAgentOverride", {"userAgent": user_agent})
-        page.add_init_script("performance.setResourceTimingBufferSize(100000)")
+        page.add_init_script(path=Path(__file__).with_suffix(".js"))
 
         # fetched from python because in-page fetch is blocked by cors for images on other domains
         @functools.cache
@@ -120,18 +69,15 @@ def main() -> None:
             try:
                 page.goto(url, timeout=60_000)
                 settle(page)
-                # expand toggles, including ones nested inside other toggles. marking each one stops a toggle that won't open from looping forever
-                toggles = page.locator(".notion-list-item-box-left [role=button][aria-expanded=false]:not([data-clicked])")
-                while toggles.count():
-                    button = toggles.first.element_handle()
-                    button.evaluate("(b) => b.setAttribute('data-clicked', '')")
+                # expanding a toggle can reveal nested toggles, so look again after every click
+                while button := page.evaluate_handle("notionsnapshot.nextToggle()").as_element():
                     button.click()
                     settle(page)
             except TimeoutError:
                 print(f"skipped {url}, it did not load. if many pages fail notion is rate limiting you, wait a few minutes and run again")
                 continue
 
-            html, links = page.evaluate(SNAPSHOT_JS, root)
+            html, links = page.evaluate("notionsnapshot.snapshot", root)
             path = out / ("index.html" if page_id(url) == root else f"{page_id(url)}.html")
             path.write_text(html, encoding="utf-8")
             print(f"{path}  {len(html) // 1024} KiB  {url}")
