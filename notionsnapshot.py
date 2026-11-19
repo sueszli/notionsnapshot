@@ -53,8 +53,8 @@ def main() -> None:
         # notion's bot check rejects the headless user agent
         user_agent = page.evaluate("navigator.userAgent").replace("Headless", "")
         browser.new_cdp_session(page).send("Network.setUserAgentOverride", {"userAgent": user_agent})
-        page.add_init_script(path=Path(__file__).parent / "inject.js")
-        css = (Path(__file__).parent / "inject.css").read_text(encoding="utf-8")
+        page.add_init_script(path=Path(__file__).parent / "assets" / "inject.js")
+        css = (Path(__file__).parent / "assets" / "inject.css").read_text(encoding="utf-8")
 
         # fetched from python because in-page fetch is blocked by cors for images on other domains
         @functools.cache

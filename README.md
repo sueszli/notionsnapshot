@@ -14,6 +14,6 @@ $ uv run notionsnapshot.py https://sueszli.notion.site/NotionSnapshot-Test-tiny-
 Requires uv. Playwright downloads Chromium on the first run.
 ```
 
-| <img width="685" src="docs/assets/export.jpeg"> | <img width="685" src="docs/assets/snapshot.jpeg"> | <img width="685" src="docs/assets/original.jpeg"> |
+| <img width="685" src="assets/export.jpeg"> | <img width="685" src="assets/snapshot.jpeg"> | <img width="685" src="assets/original.jpeg"> |
 | :---------------------------------------------: | :-----------------------------------------------: | :-----------------------------------------------: |
 |               Export with Notion                |        Scraped with ✨NotionSnapshot✨        |                   Original page                   |
