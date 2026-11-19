@@ -1,9 +1,9 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["appdirs", "beautifulsoup4", "cssutils", "html5lib", "requests", "rich", "selenium", "webdriver-manager"]
+# dependencies = ["appdirs", "beautifulsoup4", "cssutils", "html5lib", "playwright", "requests", "rich"]
 #
 # [tool.uv]
-# exclude-newer = "2024-09-15T00:00:00Z"
+# exclude-newer = "2026-11-01T00:00:00Z"
 # ///
 import urllib.parse
 import urllib.request
@@ -16,13 +16,9 @@ import re
 import uuid
 import time
 from pathlib import Path
-from typing import List, Optional, Tuple, Set
+from typing import Callable, List, Optional, Tuple, Set
 
-from selenium import webdriver
-from selenium.webdriver.support.wait import WebDriverWait
-from selenium.webdriver.common.by import By
-from selenium.webdriver.remote.webelement import WebElement
-from selenium.common.exceptions import TimeoutException
+from playwright.sync_api import ElementHandle, Page
 from bs4 import BeautifulSoup, Tag
 import html5lib  # implicitly used by bs4
 import requests
@@ -178,7 +174,7 @@ class FileManager:
 
 
 class Scraper:
-    driver: webdriver.Chrome = DriverInitializer.get_driver()
+    page: Page = DriverInitializer.get_page()
 
     will_visit: Set[str] = set([ARGS.url])
     visited: Set[str] = set()
@@ -190,7 +186,7 @@ class Scraper:
 
             Scraper._load_page(url)
             Scraper._expand_toggle_blocks()
-            soup = BeautifulSoup(Scraper.driver.page_source, "html5lib")
+            soup = BeautifulSoup(Scraper.page.content(), "html5lib")
             Scraper._clean_up(soup)
             Scraper._download_images(soup)
             Scraper._download_stylesheets(soup)
@@ -203,89 +199,92 @@ class Scraper:
             Scraper.will_visit.update(page for page in subpage_urls if page not in Scraper.visited)
             LOG.info(f"pages left to scrape: {len(Scraper.will_visit)}")
 
-        Scraper.driver.quit()
+        Scraper.page.context.close()
+
+    @staticmethod
+    def _wait_until(condition: Callable[[], bool]) -> bool:
+        deadline = time.time() + ARGS.timeout
+        while not condition():
+            if time.time() > deadline:
+                return False
+            time.sleep(0.5)
+        return True
 
     @trace()
     @staticmethod
     def _load_page(url: str) -> None:
         prev_page = ""
 
-        def is_page_loaded(d: webdriver.Chrome) -> bool:
+        def is_page_loaded() -> bool:
             nonlocal prev_page
-            root_block = d.find_elements(By.CLASS_NAME, "notion-presence-container")
+            d = Scraper.page
+            root_block = d.query_selector_all(".notion-presence-container")
             if root_block:
-                unknown_blocks = d.find_elements(By.CLASS_NAME, "notion-unknown-block")
-                loading_spinners = d.find_elements(By.CLASS_NAME, "loading-spinner")
-                scrollers = d.find_elements(By.CLASS_NAME, "notion-scroller")
-                scrollers_with_children = [scroller for scroller in scrollers if scroller.find_elements(By.TAG_NAME, "div")]
-                page_changed = prev_page != d.page_source
+                unknown_blocks = d.query_selector_all(".notion-unknown-block")
+                loading_spinners = d.query_selector_all(".loading-spinner")
+                scrollers = d.query_selector_all(".notion-scroller")
+                scrollers_with_children = [scroller for scroller in scrollers if scroller.query_selector_all("div")]
+                page_changed = prev_page != d.content()
                 all_scrollers_loaded = len(scrollers_with_children) == len(scrollers)
                 if all_scrollers_loaded and not unknown_blocks and not loading_spinners and not page_changed:
                     return True
                 LOG.info(f"waiting for: {len(unknown_blocks)} unknown blocks - {len(loading_spinners)} loading spinners - {len(scrollers_with_children)}/{len(scrollers)} scrollers with children")
-            prev_page = d.page_source
+            prev_page = d.content()
             return False
 
-        Scraper.driver.get(url)
-        try:
-            WebDriverWait(Scraper.driver, ARGS.timeout).until(is_page_loaded)
-        except TimeoutException:
+        Scraper.page.goto(url)
+        if not Scraper._wait_until(is_page_loaded):
             LOG.info("timed out waiting for page to load, proceeding anyways (might be because of infinite spinners)")
             time.sleep(10)
         LOG.info("page loaded")
 
         mode = "dark" if ARGS.dark_mode else "light"
-        Scraper.driver.execute_script("__console.environment.ThemeStore.setState({ mode: '" + mode + "' })")
+        Scraper.page.evaluate("__console.environment.ThemeStore.setState({ mode: '" + mode + "' })")
         LOG.info(f"set theme to {mode}-mode")
 
     @trace(print_args=False)
     @staticmethod
-    def _expand_toggle_blocks(expanded_toggle_blocks: Optional[List[WebElement]] = None) -> None:
-        if expanded_toggle_blocks is None:
-            expanded_toggle_blocks = []
+    def _expand_toggle_blocks(expanded_count: int = 0) -> None:
+        # playwright returns a new handle for every query, so expanded blocks are marked in the dom instead of kept in a list
+        expanded_marker = "data-notionsnapshot-expanded"
 
-        def get_toggle_blocks() -> List[WebElement]:
-            toggle_blocks = Scraper.driver.find_elements(By.CLASS_NAME, "notion-toggle-block")
+        def get_toggle_blocks() -> List[ElementHandle]:
+            toggle_blocks = Scraper.page.query_selector_all(f".notion-toggle-block:not([{expanded_marker}])")
             header_toggle_blocks = []
-            queries = [f"notion-selectable.notion-{type}-block" for type in ["header", "sub_header", "sub_sub_header"]]
+            queries = [f".notion-selectable.notion-{type}-block:not([{expanded_marker}])" for type in ["header", "sub_header", "sub_sub_header"]]
             for query in queries:
-                blocks = Scraper.driver.find_elements(By.CLASS_NAME, query)
+                blocks = Scraper.page.query_selector_all(query)
                 for block in blocks:
-                    if block.find_elements(By.CSS_SELECTOR, "div[role=button]"):
+                    if block.query_selector_all("div[role=button]"):
                         header_toggle_blocks.append(block)
             toggle_blocks += header_toggle_blocks
             return toggle_blocks
 
-        def is_block_expanded(b: WebElement) -> bool:
-            content = b.find_element(By.CSS_SELECTOR, "div:not([style]")
-            unknown_children = b.find_elements(By.CLASS_NAME, "notion-unknown-block")
-            is_loading = b.find_elements(By.CLASS_NAME, "loading-spinner")
-            return content and not unknown_children and not is_loading
+        def is_block_expanded(b: ElementHandle) -> bool:
+            content = b.query_selector("div:not([style])")
+            unknown_children = b.query_selector_all(".notion-unknown-block")
+            is_loading = b.query_selector_all(".loading-spinner")
+            return bool(content) and not unknown_children and not is_loading
 
-        toggle_blocks = get_toggle_blocks()
-        toggle_blocks = [block for block in toggle_blocks if block not in expanded_toggle_blocks]
-        assert all(isinstance(block, WebElement) for block in toggle_blocks), "toggle blocks should be web elements"
-
-        for block in toggle_blocks:
-            toggle_block_button = block.find_element(By.CSS_SELECTOR, "div[role=button]")
-            block_style = toggle_block_button.find_element(By.TAG_NAME, "svg").get_attribute("style")
-            assert isinstance(block_style, str), "toggle block style should be string"
-            assert block_style is not None
+        for block in get_toggle_blocks():
+            block.evaluate(f"(b) => b.setAttribute('{expanded_marker}', '')")
+            toggle_block_button = block.query_selector("div[role=button]")
+            assert toggle_block_button is not None
+            svg = toggle_block_button.query_selector("svg")
+            block_style = svg.get_attribute("style") if svg else None
+            assert block_style is not None, "toggle block style should be string"
             is_expanded = "(0deg)" in block_style
             if not is_expanded:
-                Scraper.driver.execute_script("arguments[0].click();", toggle_block_button)
-                try:
-                    assert isinstance(block, WebElement), "toggle block should be web element"
-                    WebDriverWait(Scraper.driver, ARGS.timeout).until(lambda d: is_block_expanded(block))
-                except TimeoutException:
+                toggle_block_button.evaluate("(b) => b.click()")
+                if not Scraper._wait_until(lambda: is_block_expanded(block)):
                     LOG.critical("timeout while expanding block - manually check if it's expanded in the snapshot")
                     continue
-            expanded_toggle_blocks.append(block)
+            expanded_count += 1
 
-        nested_toggle_blocks = [block for block in get_toggle_blocks() if block not in expanded_toggle_blocks]
-        LOG.info(f"expanded {len(expanded_toggle_blocks)} toggle blocks so far - found {len(nested_toggle_blocks)} nested blocks expand next")
+        nested_toggle_blocks = get_toggle_blocks()
+        LOG.info(f"expanded {expanded_count} toggle blocks so far - found {len(nested_toggle_blocks)} nested blocks expand next")
         if nested_toggle_blocks:
-            Scraper._expand_toggle_blocks(expanded_toggle_blocks)
+            Scraper._expand_toggle_blocks(expanded_count)
 
     @staticmethod
     def _clean_up(soup: BeautifulSoup) -> None:
