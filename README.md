@@ -8,10 +8,10 @@ the ultimate notion scraper                       /_/
 
 Usage:
 
-$ uv run notionsnapshot.py --help
-$ uv run notionsnapshot.py https://sueszli.notion.site/NotionSnapshot-Test-tiny-page-4dfa05657f774b45993542da4a8530c2
+$ ./notionsnapshot.sh https://sueszli.notion.site/NotionSnapshot-Test-tiny-page-4dfa05657f774b45993542da4a8530c2
 
-Requires uv. Playwright downloads Chromium on the first run.
+Requires Node.js. The first run downloads Chrome for Testing.
+Built on SingleFile: https://github.com/gildas-lormeau/single-file-cli
 ```
 
 | <img width="685" src="assets/export.jpeg"> | <img width="685" src="assets/snapshot.jpeg"> | <img width="685" src="assets/original.jpeg"> |
