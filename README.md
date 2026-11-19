@@ -8,10 +8,10 @@ the ultimate notion scraper                       /_/
 
 Usage:
 
-$ python notionsnapshot --help
-$ python notionsnapshot --dark-mode https://sueszli.notion.site/NotionSnapshot-Test-tiny-page-4dfa05657f774b45993542da4a8530c2
+$ uv run notionsnapshot/__main__.py --help
+$ uv run notionsnapshot/__main__.py --dark-mode https://sueszli.notion.site/NotionSnapshot-Test-tiny-page-4dfa05657f774b45993542da4a8530c2
 
-For reproducibility consider using the docker image.
+Requires uv and Google Chrome.
 ```
 
 | <img width="685" src="docs/assets/export.jpeg"> | <img width="685" src="docs/assets/snapshot.jpeg"> | <img width="685" src="docs/assets/original.jpeg"> |
