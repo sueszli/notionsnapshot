@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["appdirs", "beautifulsoup4", "cssutils", "html5lib", "playwright", "requests", "rich"]
+# dependencies = ["appdirs", "beautifulsoup4", "cssutils", "html5lib", "playwright", "requests"]
 #
 # [tool.uv]
 # exclude-newer = "2026-11-01T00:00:00Z"
@@ -11,6 +11,7 @@ import os
 import shutil
 import base64
 import functools
+import logging
 import re
 import uuid
 import time
@@ -25,7 +26,10 @@ import cssutils
 
 from argparser import ARGS
 from driver import DriverInitializer
-from logger import LOG_SINGLETON as LOG, trace
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+cssutils.log.setLevel(logging.CRITICAL)
+LOG = logging.getLogger("notionsnapshot")
 
 
 class FileManager:
@@ -57,7 +61,6 @@ class FileManager:
             LOG.critical(f"error downloading asset on '{url}' - the online link to it will be used instead \n\t{error}")
             return None
 
-    @trace()
     @staticmethod
     def download_asset(url: str) -> str:
         # assets are embedded as data urls, so every page is a single self-contained file
@@ -75,7 +78,7 @@ class FileManager:
         output_path = Path(FileManager.output_dir + "/" + filename)
         with open(output_path, "wb") as f:
             f.write(html_str.encode("utf-8").strip())
-        LOG.info(f"saved page\n\n\n\n\n\n\n")
+        LOG.info(f"saved {output_path}")
 
     @staticmethod
     def get_page_id(url: str) -> Optional[str]:
@@ -140,7 +143,6 @@ class Scraper:
             Scraper.page.set_viewport_size({"width": 900, "height": max(1200, height)})
             time.sleep(1)
 
-    @trace()
     @staticmethod
     def _load_page(url: str) -> None:
         Scraper.page.goto(url)
@@ -151,7 +153,6 @@ class Scraper:
         Scraper.page.evaluate("__console.environment.ThemeStore.setState({ mode: '" + mode + "' })")
         LOG.info(f"set theme to {mode}-mode")
 
-    @trace(print_args=False)
     @staticmethod
     def _expand_toggle_blocks() -> None:
         # expanding a toggle can reveal nested toggles, so look again after every click. marking each one stops a toggle that won't open from being clicked forever
@@ -193,7 +194,6 @@ class Scraper:
             if unwanted_og_tag and isinstance(unwanted_og_tag, Tag):
                 unwanted_og_tag.decompose()
 
-    @trace()
     @staticmethod
     def _download_images(soup: BeautifulSoup) -> None:
         images = [img for img in soup.findAll("img") if img.has_attr("src") and not (img.has_attr("class") and "notion-emoji" in img["class"])]
@@ -222,7 +222,6 @@ class Scraper:
         shared = [is_in_both(img) for img in images + emojis]
         assert not any(shared), "img is both an image and an emoji"
 
-    @trace()
     @staticmethod
     def _download_stylesheets(soup: BeautifulSoup) -> None:
         def is_stylesheet(link):
@@ -277,7 +276,6 @@ class Scraper:
         assert soup.body is not None
         soup.body.insert(-1, script)
 
-    @trace()
     @staticmethod
     def _link_to_table_view_subpages(soup: BeautifulSoup) -> None:
         # this function broke with a recent notion update
@@ -296,7 +294,6 @@ class Scraper:
                 )
                 row_name_span.wrap(subpage_anchor)
 
-    @trace()
     @staticmethod
     def _link_anchors(soup: BeautifulSoup) -> List[str]:
         subpage_urls = []
