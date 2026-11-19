@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple, Set
 
-from playwright.sync_api import ElementHandle, Page
+from playwright.sync_api import Page
 from bs4 import BeautifulSoup, Tag
 import html5lib  # implicitly used by bs4
 import requests
@@ -210,32 +210,25 @@ class Scraper:
             time.sleep(0.5)
         return True
 
+    @staticmethod
+    def _settle() -> None:
+        is_loaded = lambda: bool(Scraper.page.query_selector(".notion-frame")) and not Scraper.page.query_selector(".loading-spinner, .notion-unknown-block")
+        if not Scraper._wait_until(is_loaded):
+            LOG.info("timed out waiting for page to load, proceeding anyways (might be because of infinite spinners)")
+
+        # notion keeps streaming blocks in after the spinners are gone, so also wait until the block count stops changing
+        count = -1
+        while count != (count := len(Scraper.page.query_selector_all("[data-block-id]"))):
+            # notion only renders blocks near the viewport, so grow it until the whole page fits
+            height = Scraper.page.evaluate("document.querySelector('.notion-frame .notion-scroller')?.scrollHeight ?? 0")
+            Scraper.page.set_viewport_size({"width": 900, "height": max(1200, height)})
+            time.sleep(1)
+
     @trace()
     @staticmethod
     def _load_page(url: str) -> None:
-        prev_page = ""
-
-        def is_page_loaded() -> bool:
-            nonlocal prev_page
-            d = Scraper.page
-            root_block = d.query_selector_all(".notion-presence-container")
-            if root_block:
-                unknown_blocks = d.query_selector_all(".notion-unknown-block")
-                loading_spinners = d.query_selector_all(".loading-spinner")
-                scrollers = d.query_selector_all(".notion-scroller")
-                scrollers_with_children = [scroller for scroller in scrollers if scroller.query_selector_all("div")]
-                page_changed = prev_page != d.content()
-                all_scrollers_loaded = len(scrollers_with_children) == len(scrollers)
-                if all_scrollers_loaded and not unknown_blocks and not loading_spinners and not page_changed:
-                    return True
-                LOG.info(f"waiting for: {len(unknown_blocks)} unknown blocks - {len(loading_spinners)} loading spinners - {len(scrollers_with_children)}/{len(scrollers)} scrollers with children")
-            prev_page = d.content()
-            return False
-
         Scraper.page.goto(url)
-        if not Scraper._wait_until(is_page_loaded):
-            LOG.info("timed out waiting for page to load, proceeding anyways (might be because of infinite spinners)")
-            time.sleep(10)
+        Scraper._settle()
         LOG.info("page loaded")
 
         mode = "dark" if ARGS.dark_mode else "light"
@@ -244,47 +237,16 @@ class Scraper:
 
     @trace(print_args=False)
     @staticmethod
-    def _expand_toggle_blocks(expanded_count: int = 0) -> None:
-        # playwright returns a new handle for every query, so expanded blocks are marked in the dom instead of kept in a list
-        expanded_marker = "data-notionsnapshot-expanded"
-
-        def get_toggle_blocks() -> List[ElementHandle]:
-            toggle_blocks = Scraper.page.query_selector_all(f".notion-toggle-block:not([{expanded_marker}])")
-            header_toggle_blocks = []
-            queries = [f".notion-selectable.notion-{type}-block:not([{expanded_marker}])" for type in ["header", "sub_header", "sub_sub_header"]]
-            for query in queries:
-                blocks = Scraper.page.query_selector_all(query)
-                for block in blocks:
-                    if block.query_selector_all("div[role=button]"):
-                        header_toggle_blocks.append(block)
-            toggle_blocks += header_toggle_blocks
-            return toggle_blocks
-
-        def is_block_expanded(b: ElementHandle) -> bool:
-            content = b.query_selector("div:not([style])")
-            unknown_children = b.query_selector_all(".notion-unknown-block")
-            is_loading = b.query_selector_all(".loading-spinner")
-            return bool(content) and not unknown_children and not is_loading
-
-        for block in get_toggle_blocks():
-            block.evaluate(f"(b) => b.setAttribute('{expanded_marker}', '')")
-            toggle_block_button = block.query_selector("div[role=button]")
-            assert toggle_block_button is not None
-            svg = toggle_block_button.query_selector("svg")
-            block_style = svg.get_attribute("style") if svg else None
-            assert block_style is not None, "toggle block style should be string"
-            is_expanded = "(0deg)" in block_style
-            if not is_expanded:
-                toggle_block_button.evaluate("(b) => b.click()")
-                if not Scraper._wait_until(lambda: is_block_expanded(block)):
-                    LOG.critical("timeout while expanding block - manually check if it's expanded in the snapshot")
-                    continue
-            expanded_count += 1
-
-        nested_toggle_blocks = get_toggle_blocks()
-        LOG.info(f"expanded {expanded_count} toggle blocks so far - found {len(nested_toggle_blocks)} nested blocks expand next")
-        if nested_toggle_blocks:
-            Scraper._expand_toggle_blocks(expanded_count)
+    def _expand_toggle_blocks() -> None:
+        # expanding a toggle can reveal nested toggles, so look again after every click. marking each one stops a toggle that won't open from being clicked forever
+        query = ".notion-list-item-box-left [role=button][aria-expanded=false]:not([data-notionsnapshot-clicked])"
+        count = 0
+        while button := Scraper.page.query_selector(query):
+            button.evaluate("(b) => b.setAttribute('data-notionsnapshot-clicked', '')")
+            button.click()
+            Scraper._settle()
+            count += 1
+        LOG.info(f"expanded {count} toggle blocks")
 
     @staticmethod
     def _clean_up(soup: BeautifulSoup) -> None:
