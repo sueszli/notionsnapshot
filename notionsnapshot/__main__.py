@@ -1,3 +1,10 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["appdirs", "beautifulsoup4", "cssutils", "html5lib", "requests", "rich", "selenium", "webdriver-manager"]
+#
+# [tool.uv]
+# exclude-newer = "2024-09-15T00:00:00Z"
+# ///
 import urllib.parse
 import urllib.request
 import os
