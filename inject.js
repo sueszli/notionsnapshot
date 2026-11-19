@@ -1,4 +1,4 @@
-// injected into every page before notion's own scripts
+// injected into every page before notion's own scripts. everything that depends on notion's markup lives here
 
 // notion loads more resources than the default buffer of 250 holds, and the snapshot reads them to pick which fonts to embed
 performance.setResourceTimingBufferSize(100000)
@@ -6,6 +6,19 @@ performance.setResourceTimingBufferSize(100000)
 const pageId = (s) => s.match(/[0-9a-f]{32}/)?.[0]
 
 window.notionsnapshot = {
+  isLoaded: () => !!document.querySelector('.notion-frame') && !document.querySelector('.loading-spinner, .notion-unknown-block'),
+
+  blockCount: () => document.querySelectorAll('[data-block-id]').length,
+
+  pageHeight: () => document.querySelector('.notion-frame .notion-scroller')?.scrollHeight ?? 0,
+
+  // marking each toggle stops one that won't open from being clicked forever
+  nextToggle: () => {
+    const button = document.querySelector('.notion-list-item-box-left [role=button][aria-expanded=false]:not([data-clicked])')
+    button?.setAttribute('data-clicked', '')
+    return button
+  },
+
   // strips notion's app, inlines every asset and rewrites links to local files. returns [html, links to other pages]
   snapshot: async ({ rootId, css }) => {
     const loaded = new Set(performance.getEntriesByType('resource').map((e) => e.name))

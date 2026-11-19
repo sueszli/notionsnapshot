@@ -8,8 +8,8 @@ the ultimate notion scraper                       /_/
 
 Usage:
 
-$ uv run notionsnapshot/__main__.py --help
-$ uv run notionsnapshot/__main__.py --dark-mode https://sueszli.notion.site/NotionSnapshot-Test-tiny-page-4dfa05657f774b45993542da4a8530c2
+$ uv run notionsnapshot.py --help
+$ uv run notionsnapshot.py https://sueszli.notion.site/NotionSnapshot-Test-tiny-page-4dfa05657f774b45993542da4a8530c2
 
 Requires uv. Playwright downloads Chromium on the first run.
 ```
