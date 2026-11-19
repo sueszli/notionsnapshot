@@ -1,13 +1,10 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["playwright>=1.65"]
+# dependencies = ["playwright>=1.65", "tyro"]
 #
 # [tool.uv]
 # exclude-newer = "2026-11-19T00:00:00Z"
 # ///
-"""Save a public Notion page, and every page it links to, as self-contained HTML files."""
-
-import argparse
 import base64
 import functools
 import re
@@ -15,6 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import tyro
 from playwright.sync_api import Error, Page, TimeoutError, sync_playwright
 
 
@@ -33,18 +31,12 @@ def settle(page: Page) -> None:
         page.wait_for_timeout(1000)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("url", help="public page, e.g. https://example.notion.site/Page-0123456789abcdef0123456789abcdef")
-    parser.add_argument("out", nargs="?", default="snapshot", help="output directory (default: snapshot)")
-    args = parser.parse_args()
-    if not (root := page_id(args.url)):
-        parser.error(f"no page id in {args.url}")
-
+def main(url: str, out: Path = Path("snapshot"), /) -> None:
+    root = page_id(url)
+    assert root, f"url must contain a 32 character notion page id: {url}"
     subprocess.run([sys.executable, "-m", "playwright", "install", "--only-shell", "chromium"], check=True)
-    out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    todo, seen = [args.url], {root}
+    todo, seen = [url], {root}
 
     with sync_playwright() as p:
         # a persistent profile keeps notion's ~300 scripts in the http cache, without it repeated runs get rate limited
@@ -97,4 +89,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    tyro.cli(main, prog="notionsnapshot")
