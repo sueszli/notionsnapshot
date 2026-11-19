@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 from appdirs import user_cache_dir
 from playwright.sync_api import Page, sync_playwright
@@ -21,6 +22,5 @@ class DriverInitializer:
         # notion's bot check rejects the headless user agent
         user_agent = page.evaluate("navigator.userAgent").replace("Headless", "")
         context.new_cdp_session(page).send("Network.setUserAgentOverride", {"userAgent": user_agent})
-        # notion loads more resources than the default buffer of 250 holds, and the snapshot reads them to pick which fonts to embed
-        page.add_init_script("performance.setResourceTimingBufferSize(100000)")
+        page.add_init_script(path=Path(__file__).parent / "inject.js")
         return page
