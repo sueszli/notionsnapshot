@@ -22,7 +22,7 @@ from selenium import webdriver
 from selenium.webdriver.support.wait import WebDriverWait
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webelement import WebElement
-from selenium.common.exceptions import TimeoutException, ElementClickInterceptedException
+from selenium.common.exceptions import TimeoutException
 from bs4 import BeautifulSoup, Tag
 import html5lib  # implicitly used by bs4
 import requests
@@ -178,8 +178,7 @@ class FileManager:
 
 
 class Scraper:
-    driver_download_path: str = os.path.abspath("snapshots/" + FileManager.get_page_name() + "/assets")
-    driver: webdriver.Chrome = DriverInitializer.get_driver(driver_download_path)
+    driver: webdriver.Chrome = DriverInitializer.get_driver()
 
     will_visit: Set[str] = set([ARGS.url])
     visited: Set[str] = set()
@@ -195,7 +194,6 @@ class Scraper:
             Scraper._clean_up(soup)
             Scraper._download_images(soup)
             Scraper._download_stylesheets(soup)
-            Scraper._download_pdfs(soup)
             Scraper._insert_injection_hooks(soup)
             Scraper._link_to_table_view_subpages(soup)
             subpage_urls = Scraper._link_anchors(soup)
@@ -378,61 +376,6 @@ class Scraper:
                 f.write(modified_css_content)
 
             link["href"] = download_path
-
-    @trace()
-    @staticmethod
-    def _download_pdfs(soup: BeautifulSoup) -> None:
-        driver_blocks = Scraper.driver.find_elements(By.CLASS_NAME, "notion-file-block")
-        driver_names = [[c.text for c in b.find_elements(By.XPATH, ".//*")][-2] for b in driver_blocks]
-        assert len(driver_blocks) == len(driver_names), "number of driver blocks and names do not match"
-        driver_pairs = [nb for nb in list(zip(driver_names, driver_blocks)) if nb[0].endswith(".pdf")]
-        LOG.info(f"found {len(driver_pairs)} pdfs to download")
-
-        # notion unpredictably adds spaces to names
-        is_equal = lambda str1, str2: str1.replace(" ", "") == str2.replace(" ", "")
-        is_in_list = lambda str1, str_list: any(is_equal(str1, str2) for str2 in str_list)
-
-        for driver_name, driver_block in driver_pairs:
-            download_name = driver_name.replace("/", "_").replace(":", "_")
-            LOG.info(f"downloading file named '{download_name}'")
-
-            if download_name in os.listdir(FileManager.assets_dir):
-                LOG.info("pdf with same name was found in assets")
-
-            elif not ARGS.disable_caching and FileManager._load_from_cache(download_name) is not None:
-                LOG.info("pdf with same name was found in cache")
-
-            else:
-                assets_before_download = set(os.listdir(FileManager.assets_dir))
-
-                try:
-                    driver_block.click()
-                except ElementClickInterceptedException:
-                    webdriver.ActionChains(Scraper.driver).move_to_element(driver_block).click(driver_block).perform()
-                    Scraper.driver.execute_script("arguments[0].click();", driver_block)
-                    LOG.critical("clicking on pdf block was unsuccessful, consider running again with '-b' and clicking on it yourself")
-
-                get_new_files = lambda: set(os.listdir(FileManager.assets_dir)) - assets_before_download
-                is_downloaded = lambda: len(get_new_files()) == 1 and is_in_list(download_name, list(get_new_files()))
-                deadline = time.time() + ARGS.timeout
-                while not is_downloaded() and time.time() < deadline:
-                    time.sleep(0.25)
-                    LOG.info(f"{get_new_files()} doesn't contain '{download_name}' yet")
-                if not is_downloaded():
-                    LOG.critical(f"timed out downloading '{download_name}', it won't be linked in the snapshot")
-                    continue
-                LOG.info(f"downloaded '{download_name}'")
-
-            soup_blocks = soup.findAll("div", {"class": "notion-file-block"})
-            soup_names = [[c.text for c in b.find_all("div")][-2] for b in soup_blocks]
-            assert len(soup_blocks) == len(soup_names), "number of soup blocks and names do not match"
-            assert is_in_list(driver_name, soup_names), "driver name not found in soup names"
-
-            soup_block = soup_blocks[soup_names.index(next(n for n in soup_names if is_equal(n, driver_name)))]
-            soup_block.name = "a"
-            soup_block["href"] = "./assets/" + download_name
-            soup_block["style"] = "text-decoration: none; color: inherit;"
-            soup_block["target"] = "_blank"
 
     @staticmethod
     def _insert_injection_hooks(soup: BeautifulSoup) -> None:
