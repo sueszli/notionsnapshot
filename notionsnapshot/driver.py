@@ -21,4 +21,6 @@ class DriverInitializer:
         # notion's bot check rejects the headless user agent
         user_agent = page.evaluate("navigator.userAgent").replace("Headless", "")
         context.new_cdp_session(page).send("Network.setUserAgentOverride", {"userAgent": user_agent})
+        # notion loads more resources than the default buffer of 250 holds, and the snapshot reads them to pick which fonts to embed
+        page.add_init_script("performance.setResourceTimingBufferSize(100000)")
         return page

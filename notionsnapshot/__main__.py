@@ -9,9 +9,8 @@ import urllib.parse
 import urllib.request
 import os
 import shutil
-import glob
-import hashlib
-import mimetypes
+import base64
+import functools
 import re
 import uuid
 import time
@@ -23,7 +22,6 @@ from bs4 import BeautifulSoup, Tag
 import html5lib  # implicitly used by bs4
 import requests
 import cssutils
-from appdirs import user_cache_dir
 
 from argparser import ARGS
 from driver import DriverInitializer
@@ -32,124 +30,42 @@ from logger import LOG_SINGLETON as LOG, trace
 
 class FileManager:
     output_dir: str = ""
-    assets_dir: str = ""
-    cache_dir: str = ""
-    css_injection_file: str = ""
-    js_injection_file: str = ""
 
     @staticmethod
     def setup() -> None:
-        page_name = FileManager.get_page_name()
-        FileManager.output_dir = os.path.join("snapshots", page_name)
-        FileManager.assets_dir = os.path.join(FileManager.output_dir, "assets")
-
-        cache_base_dir = user_cache_dir(appname="notion-snapshot", appauthor="sueszli")
-        FileManager.cache_dir = os.path.join(cache_base_dir, page_name)
-
-        FileManager._init_output_dir()
-
-        css_file, js_file = FileManager._copy_injections_to_assets_dir()
-        FileManager.css_injection_file = css_file
-        FileManager.js_injection_file = js_file
+        FileManager.output_dir = os.path.join("snapshots", FileManager.get_page_name())
+        if os.path.exists(FileManager.output_dir):
+            shutil.rmtree(FileManager.output_dir)
+            LOG.info("removed previous snapshot for this url")
+        os.makedirs(FileManager.output_dir)
 
     @staticmethod
     def get_page_name() -> str:
         page_id = urllib.parse.urlparse(ARGS.url).path[1:]
         return page_id[: page_id.rfind("-")].lower()
 
-    @trace()
+    @functools.cache
     @staticmethod
-    def _init_output_dir() -> None:
-        if not ARGS.disable_caching and os.path.exists(FileManager.assets_dir):
-            shutil.copytree(FileManager.assets_dir, FileManager.cache_dir, dirs_exist_ok=True)
-            LOG.info("cached assets from previous snapshot for this url")
-
-        if os.path.exists(FileManager.output_dir):
-            shutil.rmtree(FileManager.output_dir)
-            LOG.info(f"removed previous snapshot for this url")
-
-        os.makedirs(FileManager.output_dir, exist_ok=True)
-        os.makedirs(FileManager.assets_dir, exist_ok=True)
-        if not ARGS.disable_caching:
-            os.makedirs(FileManager.cache_dir, exist_ok=True)
-
-    @staticmethod
-    def _copy_injections_to_assets_dir() -> Tuple[str, str]:
-        injection_dir = Path(__file__).parent / "injections"
-        css_out = Path(FileManager.assets_dir) / "injection.css"
-        js_out = Path(FileManager.assets_dir) / "injection.js"
-        shutil.copy(injection_dir / "injection.js", js_out)
-        shutil.copy(injection_dir / "injection.css", css_out)
-        relative_css_out = str(css_out.relative_to(FileManager.output_dir)).replace("\\", "/")
-        relative_js_out = str(js_out.relative_to(FileManager.output_dir)).replace("\\", "/")
-        return relative_css_out, relative_js_out
-
-    @trace()
-    @staticmethod
-    def download_asset(url: str, filename: str = "") -> str:
-        if not filename:
-            filename = FileManager._generate_filename(url)
-
-        already_downloaded = glob.glob(os.path.join(FileManager.assets_dir, filename + ".*"))
-        if already_downloaded:
-            LOG.info(f"asset '{filename}' was already downloaded")
-            return str(Path(already_downloaded[0]).relative_to(FileManager.output_dir)).replace("\\", "/")
-
-        if not ARGS.disable_caching and (cached := FileManager._load_from_cache(filename)) is not None:
-            LOG.info(f"asset '{filename}' was found in cache")
-            return cached
-
-        destination = Path(FileManager.assets_dir) / filename
+    def fetch(url: str) -> Optional[Tuple[str, bytes]]:
         try:
             session = requests.Session()
             session.trust_env = False
-            response = session.get(url)
+            response = session.get(url, timeout=ARGS.timeout)
             response.raise_for_status()
-
-            missing_file_extension = not bool(destination.suffix)
-            if missing_file_extension:
-                suffix = Path(urllib.parse.urlparse(url).path).suffix
-                question_mark = "%3f"
-                if suffix:
-                    if question_mark in suffix.lower():
-                        suffix = re.split(question_mark, suffix, flags=re.IGNORECASE)[0]
-                    destination = destination.with_suffix(suffix)
-                else:
-                    content_type = response.headers.get("content-type")
-                    assert content_type is not None
-                    mimetype = mimetypes.guess_extension(content_type)
-                    assert mimetype is not None
-                    destination = destination.with_suffix(mimetype)
-
-            with open(destination, "wb") as f:
-                f.write(response.content)
-
-            return str(destination.relative_to(FileManager.output_dir)).replace("\\", "/")
-
+            return response.headers.get("content-type", "application/octet-stream").split(";")[0], response.content
         except Exception as error:
             LOG.critical(f"error downloading asset on '{url}' - the online link to it will be used instead \n\t{error}")
+            return None
+
+    @trace()
+    @staticmethod
+    def download_asset(url: str) -> str:
+        # assets are embedded as data urls, so every page is a single self-contained file
+        asset = FileManager.fetch(url)
+        if asset is None:
             return url
-
-    @staticmethod
-    def _generate_filename(url: str) -> str:
-        parsed_url = urllib.parse.urlparse(url)
-        queryless_url = parsed_url.netloc + parsed_url.path
-        params = urllib.parse.parse_qs(parsed_url.query)
-        # having width in hash as name allows fetching different image resolutions
-        if "width" in params.keys():
-            queryless_url = queryless_url + f"?width={params['width']}"
-        filename = hashlib.sha1(str.encode(queryless_url)).hexdigest()
-        return filename
-
-    @staticmethod
-    def _load_from_cache(filename: str) -> Optional[str]:
-        filename = filename if Path(filename).suffix else filename + ".*"
-        cache_path = os.path.join(FileManager.cache_dir, filename)
-        cached = glob.glob(cache_path)
-        if cached:
-            shutil.copy(cached[0], FileManager.assets_dir)
-            return os.path.join("assets", os.path.basename(cached[0]))
-        return None
+        mime, content = asset
+        return f"data:{mime};base64,{base64.b64encode(content).decode()}"
 
     @staticmethod
     def save_page(soup: BeautifulSoup, url: str) -> None:
@@ -252,7 +168,7 @@ class Scraper:
     def _clean_up(soup: BeautifulSoup) -> None:
         for script in soup.findAll("script"):
             script.decompose()
-        for aif_production in soup.findAll("iframe", {"src": "https://aif.notion.so/aif-production.soup"}):
+        for aif_production in soup.findAll("iframe", {"src": "https://aif.notion.so/aif-production.html"}):
             aif_production.decompose()
         for intercom_frame in soup.findAll("iframe", {"id": "intercom-frame"}):
             intercom_frame.decompose()
@@ -260,6 +176,10 @@ class Scraper:
             intercom_div.decompose()
         for overlay_div in soup.findAll("div", {"class": "notion-overlay-container"}):
             overlay_div.decompose()
+        # preloads, icons and manifests point at files the self-contained page doesn't have
+        for link in soup.findAll("link"):
+            if "stylesheet" not in link.get("rel", []):
+                link.decompose()
         for vendors_css in soup.find_all("link", href=lambda text: bool(text) and "vendors~" in text):
             vendors_css.decompose()
         for collection_selector in soup.findAll("div", {"class": "notion-collection-view-select"}):
@@ -311,32 +231,26 @@ class Scraper:
         stylesheets = [link for link in soup.findAll("link", rel="stylesheet") if is_stylesheet(link)]
         base_url = "https://www.notion.so"
 
+        # stylesheets reference every font notion has, so only embed the ones this page loaded
+        loaded_paths = {urllib.parse.urlparse(url).path for url in Scraper.page.evaluate("performance.getEntriesByType('resource').map((e) => e.name)")}
+        url_pattern = re.compile(r"url\((https?:\/\/www\.notion\.so)?(\/[^)]+)\)")
+
+        def url_replacer(match):
+            full_url, partial_url = match.groups()
+            if not full_url:
+                font_url = f"{base_url}{partial_url}"
+                return f"url({FileManager.download_asset(font_url) if partial_url in loaded_paths else font_url})"
+            return match.group(0)
+
         for link in stylesheets:
-            download_path = FileManager.download_asset(f'{base_url}{link["href"]}')
-
-            css_file_path = os.path.join(FileManager.output_dir, download_path)
-            # Open file with UTF-8 encoding
-            with open(css_file_path, "r", encoding="utf-8") as f:
-                css_content = f.read()
-
-            # Write back with UTF-8 encoding
-            with open(css_file_path, "w", encoding="utf-8") as f:
-                url_pattern = re.compile(r"url\((https?:\/\/www\.notion\.so)?(\/[^)]+)\)")
-
-                def url_replacer(match):
-                    full_url, partial_url = match.groups()
-                    if not full_url:
-                        font_file_name = os.path.basename(partial_url)
-                        font_download_url = f"{base_url}{partial_url}"
-                        font_local_path = FileManager.download_asset(font_download_url, font_file_name)
-                        return f"url({font_local_path})"
-                    return match.group(0)
-
-                # Replace the URLs in the CSS content
-                modified_css_content = url_pattern.sub(url_replacer, css_content)
-                f.write(modified_css_content)
-
-            link["href"] = download_path
+            css_url = f'{base_url}{link["href"]}'
+            asset = FileManager.fetch(css_url)
+            if asset is None:
+                link["href"] = css_url
+                continue
+            style = soup.new_tag("style")
+            style.string = url_pattern.sub(url_replacer, asset[1].decode("utf-8"))
+            link.replace_with(style)
 
     @staticmethod
     def _insert_injection_hooks(soup: BeautifulSoup) -> None:
@@ -353,10 +267,15 @@ class Scraper:
                 toggle_content["class"] = toggle_content.get("class", []) + ["notionsnapshot-toggle-content"]
                 toggle_content.attrs["notionsnapshot-toggle-id"] = toggle_button.attrs["notionsnapshot-toggle-id"] = uuid.uuid4()
 
+        injection_dir = Path(__file__).parent / "injections"
+        style = soup.new_tag("style")
+        style.string = (injection_dir / "injection.css").read_text(encoding="utf-8")
         assert soup.head is not None
-        soup.head.insert(-1, soup.new_tag("link", rel="stylesheet", href=FileManager.css_injection_file))
+        soup.head.insert(-1, style)
+        script = soup.new_tag("script")
+        script.string = (injection_dir / "injection.js").read_text(encoding="utf-8")
         assert soup.body is not None
-        soup.body.insert(-1, soup.new_tag("script", type="text/javascript", src=FileManager.js_injection_file))
+        soup.body.insert(-1, script)
 
     @trace()
     @staticmethod
