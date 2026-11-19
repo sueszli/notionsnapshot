@@ -23,10 +23,10 @@ def page_id(url: str) -> str | None:
 
 def settle(page: Page) -> None:
     page.wait_for_function("notionsnapshot.isLoaded()", timeout=60_000)
-    # notion keeps streaming blocks in after the spinners are gone, so also wait until the block count stops changing
+    # blocks keep streaming in after the spinners are gone: wait for a stable count
     count = -1
     while count != (count := page.evaluate("notionsnapshot.blockCount()")):
-        # notion only renders blocks near the viewport, so grow it until the whole page fits
+        # notion only renders blocks near the viewport
         page.set_viewport_size({"width": 1280, "height": max(1000, page.evaluate("notionsnapshot.pageHeight()"))})
         page.wait_for_timeout(1000)
 
@@ -39,16 +39,16 @@ def main(url: str, out: Path = Path("snapshot"), /) -> None:
     todo, seen = [url], {root}
 
     with sync_playwright() as p:
-        # a persistent profile keeps notion's ~300 scripts in the http cache, without it repeated runs get rate limited
+        # persistent http cache, else notion rate limits repeated runs
         browser = p.chromium.launch_persistent_context(Path.home() / ".cache" / "notionsnapshot", viewport={"width": 1280, "height": 1000})
         page = browser.pages[0]
-        # notion's bot check rejects the headless user agent
+        # bot check rejects "HeadlessChrome"
         user_agent = page.evaluate("navigator.userAgent").replace("Headless", "")
         browser.new_cdp_session(page).send("Network.setUserAgentOverride", {"userAgent": user_agent})
         page.add_init_script(path=Path(__file__).parent / "assets" / "inject.js")
         css = (Path(__file__).parent / "assets" / "inject.css").read_text(encoding="utf-8")
 
-        # fetched from python because in-page fetch is blocked by cors for images on other domains
+        # in-page fetch is cors-blocked for cross-origin assets
         @functools.cache
         def data_url(url: str) -> str | None:
             try:
@@ -68,7 +68,7 @@ def main(url: str, out: Path = Path("snapshot"), /) -> None:
             try:
                 page.goto(url, timeout=60_000)
                 settle(page)
-                # expanding a toggle can reveal nested toggles, so look again after every click
+                # toggles nest: re-query after each click
                 while button := page.evaluate_handle("notionsnapshot.nextToggle()").as_element():
                     button.click()
                     settle(page)

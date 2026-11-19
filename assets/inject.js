@@ -1,6 +1,6 @@
-// injected into every page before notion's own scripts. everything that depends on notion's markup lives here
+// injected before notion's scripts. all notion-markup-specific code lives here
 
-// notion loads more resources than the default buffer of 250 holds, and the snapshot reads them to pick which fonts to embed
+// default buffer of 250 is too small, snapshot() reads it to pick fonts
 performance.setResourceTimingBufferSize(100000)
 
 const pageId = (s) => s.match(/[0-9a-f]{32}/)?.[0]
@@ -12,18 +12,18 @@ window.notionsnapshot = {
 
   pageHeight: () => document.querySelector('.notion-frame .notion-scroller')?.scrollHeight ?? 0,
 
-  // marking each toggle stops one that won't open from being clicked forever
+  // mark clicked toggles, so a stuck one isn't clicked forever
   nextToggle: () => {
     const button = document.querySelector('.notion-list-item-box-left [role=button][aria-expanded=false]:not([data-clicked])')
     button?.setAttribute('data-clicked', '')
     return button
   },
 
-  // strips notion's app, inlines every asset and rewrites links to local files. returns [html, links to other pages]
+  // live dom => self-contained html. returns [html, subpage links]
   snapshot: async ({ rootId, css }) => {
     const loaded = new Set(performance.getEntriesByType('resource').map((e) => e.name))
     const dataUrl = async (u) => (await window.dataUrl(u)) ?? u
-    // stylesheets reference every font notion has, so only embed what this page actually used
+    // only embed fonts this page loaded
     const inlineUrls = async (text, base, all) => {
       let out = ''
       let i = 0
@@ -36,7 +36,7 @@ window.notionsnapshot = {
       return out + text.slice(i)
     }
 
-    // work on a detached copy, notion's app keeps mutating the live page while we await
+    // detached copy: notion keeps mutating the live dom
     const doc = new DOMParser().parseFromString(document.documentElement.outerHTML, 'text/html')
     const abs = (e, attr) => new URL(e.getAttribute(attr), location.href)
     doc.querySelectorAll('script, noscript, base, link:not([rel=stylesheet]), meta:not([charset], [name=viewport]), .notion-overlay-container, .notion-collection-view-select, #intercom-frame, .intercom-lightweight-app').forEach((e) => e.remove())
@@ -65,11 +65,11 @@ window.notionsnapshot = {
       e.removeAttribute('loading')
     }
 
-    // notion fades embeds in with javascript, which the snapshot doesn't have
+    // notion fades embeds in via js
     for (const e of doc.querySelectorAll('iframe')) e.parentElement.style.opacity = 1
     for (const e of doc.querySelectorAll('.collectionSearch')) e.parentElement.style.display = 'none'
 
-    // table of contents links point at #<block id without dashes>
+    // toc links => #<block id without dashes>
     for (const e of doc.querySelectorAll('[data-block-id]')) e.id = e.dataset.blockId.replaceAll('-', '')
     const links = []
     for (const a of doc.querySelectorAll('a[href]')) {
