@@ -1,5 +1,2 @@
-snapshots/
-log.txt
-__pycache__/
-.venv/
+snapshot/
 .DS_Store
