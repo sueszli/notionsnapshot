@@ -6,11 +6,33 @@
 /_/ |_/\____/\__/_/\____/_/ /_/   /____/_/ /_/\__,_/ .___/____/_/ /_/\____/\__/
 the ultimate notion scraper                       /_/
 
-Usage:
+This used to be a custom scraper until I figured out there's already a tool for that lol.
+Now it's one SingleFile command plus a tiny script that expands Notion's toggles:
 
-$ ./notionsnapshot.sh https://sueszli.notion.site/NotionSnapshot-Test-tiny-page-4dfa05657f774b45993542da4a8530c2
+$ mkdir snapshot && cd snapshot
+$ npx single-file-cli@2.0.75 https://sueszli.notion.site/NotionSnapshot-Test-tiny-page-4dfa05657f774b45993542da4a8530c2 \
+    --browser-script=../assets/inject.js \
+    --browser-height=20000 \
+    --browser-wait-until=load \
+    --block-fonts=true \
+    --block-videos=false \
+    --block-audios=false \
+    --crawl-links=true \
+    --crawl-max-depth=0 \
+    --crawl-replace-URLs=true \
+    --crawl-rewrite-rule='^(https://[^/]+/)(p/)?([^?]*).*$ $1$3' \
+    --max-parallel-workers=1 \
+    --filename-template='{url-last-segment}.html'
 
-Requires Node.js. The first run downloads Chrome for Testing.
+Needs Node.js and Chrome. Why the flags:
+
+  --browser-height        notion only renders blocks near the viewport
+  --browser-wait-until    notion never goes network idle
+  --block-fonts           notion's css pulls in every font it has, ~8 mb per page
+  --crawl-rewrite-rule    notion links each page as /<id>, /p/<id> and ?pvs=<n>
+  --max-parallel-workers  more than 1 gets rate limited and silently drops pages
+  cd snapshot             --crawl-replace-URLs only rewrites files in the working dir
+
 Built on SingleFile: https://github.com/gildas-lormeau/single-file-cli
 ```
 
